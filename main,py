@@ -1,0 +1,293 @@
+import asyncio
+from keyboards import *
+from aiogram import Bot, types
+from aiogram.dispatcher import Dispatcher
+from aiogram.types import ParseMode
+from aiogram.utils import executor
+from aiogram.utils.markdown import *
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+import datetime
+from aiogram.dispatcher import filters
+import sqlite3
+
+storage = MemoryStorage()
+
+def connect_db(db_name):
+    connect = sqlite3.connect(db_name)
+    cursor = connect.cursor()
+    return (connect, cursor)
+
+bot = Bot(token="5644768745:AAGOrfSr-ZI62Dylu6PXVgp4IBXBDFEf70U")
+dp = Dispatcher(bot, storage = storage)
+
+class casino_game(StatesGroup):
+    mode = State()
+    bet = State()
+    choice = State()
+
+@dp.message_handler(filters.Text(contains=["Казино"] , ignore_case=True))
+async def casino(mes: types.Message):
+    await casino_game.mode.set()
+    await mes.answer(f"Для выбора лёгкой версии игры нажмите <b>Light game</b> \n"
+                     f"Для выбора сложной версии игры нажмите <b>Hard game</b> \n"
+                     f"Для выбора игры в баскетбол нажмите <b>Basketball</b> \n",parse_mode='HTML',  reply_markup=casino_kb)
+
+async def back(message: types.Message , state: FSMContext):
+    if message.text == "Назад":
+        await state.finish()
+        await start(message)
+        return False
+    else:
+        return True
+
+@dp.message_handler(state=casino_game.mode)
+async  def load_mode(message: types.Message , state: FSMContext):
+    if back(message, state):
+        async with state.proxy() as data:
+            data["mode"] = message.text
+        await casino_game.next()
+        await message.reply("Введите вашу ставку: ")
+
+@dp.message_handler(state=casino_game.bet)
+async def bet(message: types.Message , state: FSMContext):
+    if back(message, state):
+        connect, cursor = connect_db("game.db")
+        cursor.execute(f"""SELECT  cristals FROM game WHERE id = {message.chat.id}""")
+        data = cursor.fetchone()
+        if data[0] < int(message.text) :
+            await message.answer("У вас нет столько денег!" , reply_markup=start_kb)
+            await  state.finish()
+            return
+        else:
+            async with state.proxy() as data:
+                data["bet"] = message.text
+                if data["mode"] == "Light game":
+                    await message.reply("Выберите диапозон", reply_markup=casino_l)
+                elif data["mode"] == "Hard game":
+                    await message.reply("Выберите диапозон", reply_markup=casino_h)
+                elif data["mode"] == "Basketball":
+                    await message.reply("Выберите попадёт или нет" , reply_markup=basket_g)
+        await casino_game.next()
+
+@dp.message_handler(state=casino_game.choice)
+async def choice(message: types.Message , state: FSMContext):
+    if message.text == "Назад":
+        await state.finish()
+        await start(message)
+        return
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT  cristals FROM game WHERE id = {message.chat.id}""")
+    data1 = cursor.fetchone()
+    result = ""
+    result_num = ""
+    async with state.proxy() as data:
+        if data["mode"] == "Hard game" or data["mode"] == "Light game":
+            result = await bot.send_dice(message.chat.id)
+        elif data["mode"] == "Basketball":
+            result = await bot.send_dice(message.chat.id , emoji="🏀")
+        await asyncio.sleep(2)
+        result_num = result["dice"]["value"]
+        if data["mode"] == "Hard game":
+            if int(message.text) == result_num:
+                await message.answer("вы выиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] + int(data["bet"]) * 6 } WHERE id =  {message.chat.id}""")
+                connect.commit()
+            else:
+                await message.answer("вы проиграли!", reply_markup=casino_kb)
+                cursor.execute(f"""UPDATE  game SET cristals  = {data1[0] - int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            await state.finish()
+            await casino_game.mode.set()
+        elif data["mode"] == "Light game":
+            if message.text == "1 - 3" and result_num in [1,2,3]:
+                await message.answer("вы выиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] + int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "1 - 3" and result_num in [4,5,6]:
+                await message.answer("вы проиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] - int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "4 - 6" and result_num in [4,5,6]:
+                await message.answer("вы выиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] + int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "4 - 6" and result_num in [1,2,3]:
+                await message.answer("вы проиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] - int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            await state.finish()
+            await casino_game.mode.set()
+        elif data["mode"] == "Basketball":
+            if message.text == "Попадёт" and result_num in [4,5]:
+                await message.answer("Вы выиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] + int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "Попадёт" and result_num in [1,2,3]:
+                await message.answer("Вы проиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] - int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "Не попадёт" and result_num in [4,5]:
+                await message.answer("Вы проиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] - int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+            elif message.text == "Не попадёт" and result_num in [1,2,3]:
+                await message.answer("Вы выиграли!", reply_markup=casino_kb)
+                cursor.execute(
+                    f"""UPDATE  game SET cristals  = {data1[0] + int(data["bet"])} WHERE id =  {message.chat.id}""")
+                connect.commit()
+
+
+@dp.message_handler(filters.Text(contains=["Баланс"] , ignore_case=True))
+async  def balance(message: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT level , money , cristals , oil FROM game WHERE id = {message.chat.id}""")
+    data = cursor.fetchone()
+    await message.reply(f"У вас: {data[1]} монет \n"
+                        f"У вас: {data[2]} кристалов \n"
+                        f"У вас: {data[3]} нефти")
+
+@dp.message_handler(filters.Text(contains=["Фарм"] , ignore_case=True))
+async def farm(message: types.Message):
+    connect , cursor = connect_db("game.db")
+    await message.answer("Для заработка нажмите на кнопку!" , reply_markup=earn_kb)
+
+@dp.message_handler(filters.Text(contains=["Нефть"] , ignore_case=True))
+async def farm(message: types.Message):
+    connect , cursor = connect_db("game.db")
+    await message.answer("Для заработка нефтb нажмите на кнопку!" , reply_markup=earn2_kb)
+
+@dp.callback_query_handler(text='get2')
+async def earn_money(callback: types.CallbackQuery):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT level , oil FROM game WHERE id = {callback.message.chat.id}""")
+    data = cursor.fetchone()
+    cursor.execute(f"""UPDATE game SET 
+    oil = {data[1] + data[0] * 3 } WHERE id = {callback.message.chat.id}""")
+    connect.commit()
+    await callback.answer(f"Вы заработали {data[0] * 3} нефти!" , show_alert=True)
+
+@dp.callback_query_handler(text='get')
+async def earn_money(callback: types.CallbackQuery):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT level , money FROM game WHERE id = {callback.message.chat.id}""")
+    data = cursor.fetchone()
+    cursor.execute(f"""UPDATE game SET 
+    money = {data[1] + data[0]} WHERE id = {callback.message.chat.id}""")
+    connect.commit()
+    await callback.answer(f"Вы заработали {data[0]} монет!" , show_alert=True)
+
+@dp.message_handler(filters.Text(contains=["Магазин"] , ignore_case=True))
+async def shop(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT level FROM 
+        game WHERE id  = {mes.chat.id}""")
+    data = cursor.fetchone()
+    await mes.answer(f"Увелечение уровня стоит {data[0] * data[0] * 5} монет.\n"
+                     f"Для увеличения уровня нажмите на кнопку <b>Up Level</b> \n"
+                     f"Для покупки кристаллов нажмите на кнопку  <b>Buy Cristalls</b> \n"
+                     f"Курс для покупки кристаллов:\n "
+                     f"12 монет = 1 кристалл \n"
+                     f"38 нефти = 1 кристалл \n"
+                     f"Для возвращения назад нажмите кнопку <b>Back</b>" ,parse_mode='HTML',  reply_markup=shop_kb)
+
+@dp.message_handler(filters.Text(contains=["Up Level"] , ignore_case=True))
+async def uplevel(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT level , money  FROM 
+            game WHERE id  = {mes.chat.id}""")
+    data = cursor.fetchone()
+    if data[1] < (data[0] * data[0] * 5):
+        await mes.answer("У вас не хваттает денег для улучшения на новый урвень!" , reply_markup=shop_kb)
+    else:
+        cursor.execute((f"""UPDATE game SET (level , money) = 
+        ({data[0] + 1} , {data[1] - (data[0] * data[0] * 5 )})
+        WHERE id = {mes.chat.id}"""))
+        connect.commit()
+        await mes.answer(f"Теперь у тебя {data[0] + 1} уровень." , reply_markup=shop_kb)
+
+@dp.message_handler(filters.Text(contains=["Buy Cristalls money"] , ignore_case=True))
+async def buycrm(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT cristals , money  FROM 
+            game WHERE id  = {mes.chat.id}""")
+    data = cursor.fetchone()
+    if data[1] < 12 :
+        await mes.answer("У вас не хваттает денег для покупки кристаллов!" , reply_markup=shop_kb)
+    else:
+        cursor.execute((f"""UPDATE game SET (cristals , money) = 
+        ({data[0] + 1} , {data[1] - 12})
+        WHERE id = {mes.chat.id}"""))
+        connect.commit()
+        await mes.answer(f"Теперь у тебя {data[0] + 1} кристаллов" , reply_markup=shop_kb)
+
+@dp.message_handler(filters.Text(contains=["Buy Cristalls oil"] , ignore_case=True))
+async def buycro(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT cristals , oil  FROM 
+            game WHERE id  = {mes.chat.id}""")
+    data = cursor.fetchone()
+    if data[1] < 38 :
+        await mes.answer("У вас не хваттает денег для покупки кристаллов!" , reply_markup=shop_kb)
+    else:
+        cursor.execute((f"""UPDATE game SET (cristals , oil) = 
+        ({data[0] + 1} , {data[1] - 38})
+        WHERE id = {mes.chat.id}"""))
+        connect.commit()
+        await mes.answer(f"Теперь у тебя {data[0] + 1} кристаллов" , reply_markup=shop_kb)
+
+@dp.message_handler(filters.Text(contains=["Топ"] , ignore_case=True))
+async def leader(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT *  FROM 
+            game ORDER BY cristals DESC """)
+    data = cursor.fetchall()
+    leaderboard = "<b>Топ:</b>\n"
+    for i in range(0,len(data)):
+        leaderboard += f"{data[i][0]} - {data[i][2]}\n"
+    await mes.answer(leaderboard,reply_markup=start_kb , parse_mode="HTML")
+
+@dp.message_handler(commands=["start"])
+@dp.message_handler(filters.Text(contains=["Back"] , ignore_case=True))
+@dp.message_handler(filters.Text(contains=["Назад"], ignore_case=True))
+async def start(message:types.Message):
+    connect, cursor = connect_db("game.db")
+    await message.reply("Привет, я бот для получения криссталов. \n"
+                        "\n"
+                        "Для просмотра сколько у тебя денег нажми <b>Баланс</b>.  \n" 
+                        "Для получения денег нажми <b>Фарм</b> \n"
+                        "Для покупки криссталов или покупки нового уровня нажми <b>Магазин</b> \n"
+                        "Для просмтора кто сейчас в топе нажми <b>Топ</b> \n" , parse_mode='HTML' , reply_markup=start_kb )
+
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game(
+                name TEXT,
+                money INTEGER,
+                cristals INTEGER,
+                id INTEGER,
+                level INTEGER,
+                oil INTEGER,
+                UNIQUE(id)
+            );
+        """)
+    connect.commit()
+    cursor.execute("""INSERT OR IGNORE INTO game VALUES(?,?,?,?,?,?); """ ,
+                   [message.from_user.username , 0 , 0 , message.chat.id , 1 , 0])
+    connect.commit()
+
+@dp.message_handler(commands=['drop'])
+async def send_welcome(message: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"DROP TABLE game")
+    connect.commit()
+
+executor.start_polling(dp, skip_updates=True)
