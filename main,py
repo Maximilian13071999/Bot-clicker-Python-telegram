@@ -34,6 +34,16 @@ async def casino(mes: types.Message):
                      f"Для выбора сложной версии игры нажмите <b>Hard game</b> \n"
                      f"Для выбора игры в баскетбол нажмите <b>Basketball</b> \n",parse_mode='HTML',  reply_markup=casino_kb)
 
+@dp.message_handler(state=casino_game.mode)
+async  def load_mode(message: types.Message , state: FSMContext):
+    if not message.text in ["Light game", "Hard game", "Basketball"]:
+        await state.finish()
+        await casino(message)
+    async with state.proxy() as data:
+        data["mode"] = message.text
+    await casino_game.next()
+    await message.reply("Введите вашу ставку: ")
+
 async def back(message: types.Message , state: FSMContext):
     if message.text == "Назад":
         await state.finish()
@@ -42,20 +52,16 @@ async def back(message: types.Message , state: FSMContext):
     else:
         return True
 
-@dp.message_handler(state=casino_game.mode)
-async  def load_mode(message: types.Message , state: FSMContext):
-    if back(message, state):
-        async with state.proxy() as data:
-            data["mode"] = message.text
-        await casino_game.next()
-        await message.reply("Введите вашу ставку: ")
-
 @dp.message_handler(state=casino_game.bet)
 async def bet(message: types.Message , state: FSMContext):
     if back(message, state):
         connect, cursor = connect_db("game.db")
-        cursor.execute(f"""SELECT  cristals FROM game WHERE id = {message.chat.id}""")
+        cursor.execute(f"""SELECT cristals FROM game WHERE id = {message.chat.id}""")
         data = cursor.fetchone()
+        if (not message.text.isdigit()):
+            await message.reply("Введите вашу ставку: ")
+            return
+
         if data[0] < int(message.text) :
             await message.answer("У вас нет столько денег!" , reply_markup=start_kb)
             await  state.finish()
@@ -83,6 +89,10 @@ async def choice(message: types.Message , state: FSMContext):
     result = ""
     result_num = ""
     async with state.proxy() as data:
+        if data["mode"] == "Basketball" and not message.text in ["Попадёт", "Не попадёт"]:
+            await message.reply("Выберите попадёт или нет" , reply_markup=basket_g)
+            return
+
         if data["mode"] == "Hard game" or data["mode"] == "Light game":
             result = await bot.send_dice(message.chat.id)
         elif data["mode"] == "Basketball":
@@ -248,8 +258,17 @@ async def buycro(mes: types.Message):
 @dp.message_handler(filters.Text(contains=["Топ"] , ignore_case=True))
 async def leader(mes: types.Message):
     connect, cursor = connect_db("game.db")
-    cursor.execute(f"""SELECT *  FROM 
-            game ORDER BY cristals DESC """)
+    cursor.execute(f"""SELECT *  FROM game ORDER BY cristals DESC """)
+    data = cursor.fetchall()
+    leaderboard = "<b>Топ:</b>\n"
+    for i in range(0,len(data)):
+        leaderboard += f"{data[i][0]} - {data[i][2]}\n"
+    await mes.answer(leaderboard,reply_markup=start_kb , parse_mode="HTML")
+
+@dp.message_handler(filters.Text(contains=["Топ"] , ignore_case=True))
+async def leader(mes: types.Message):
+    connect, cursor = connect_db("game.db")
+    cursor.execute(f"""SELECT *  FROM game ORDER BY cristals DESC """)
     data = cursor.fetchall()
     leaderboard = "<b>Топ:</b>\n"
     for i in range(0,len(data)):
